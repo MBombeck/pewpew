@@ -1,0 +1,1062 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+<title>Bombeck.io — Attack Map</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+/* === Dracula Theme === */
+:root {
+  --bg: #0d0e14;
+  --text: #f8f8f2;
+  --text-muted: #6272a4;
+  --text-dim: #44475a;
+  --accent: #bd93f9;
+  --accent-glow: rgba(189,147,249,0.3);
+  --accent-bg: rgba(189,147,249,0.15);
+  --border: rgba(189,147,249,0.35);
+  --land: #191a2e;
+  --map-border: #6272a4;
+  --panel-bg: rgba(13,14,20,0.9);
+  --header-bg-start: rgba(13,14,20,0.95);
+  --log-bg-start: rgba(13,14,20,0.95);
+  --tooltip-bg: rgba(13,14,20,0.95);
+  --tooltip-ip: #f8f8f2;
+  --tooltip-label: #6272a4;
+  --ip-color: #f8f8f2;
+  --panel-title: #6272a4;
+  --top-country: #f8f8f2;
+  --spinner-border: #44475a;
+  --ban: #ff79c6;
+  --sshd: #8be9fd;
+  --aggressive: #ffb86c;
+  --portscan: #50fa7b;
+  --ids-high: #ff5555;
+  --ids-alert: #f1fa8c;
+  --target-stroke: rgba(189,147,249,0.4);
+  --target-pulse: rgba(189,147,249,0.5);
+  --target-fill: rgba(189,147,249,0.6);
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+  overflow: hidden;
+  height: 100vh;
+  width: 100vw;
+  transition: background 0.4s;
+}
+
+#map-wrapper {
+  position: absolute;
+  top: 100px; left: 180px; right: 180px; bottom: 100px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+#map-container {
+  position: relative;
+}
+
+
+
+#header {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  z-index: 100;
+  padding: 12px 24px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: linear-gradient(180deg, var(--header-bg-start) 0%, transparent 100%);
+  pointer-events: none;
+}
+#header > * { pointer-events: auto; }
+.title {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--accent);
+  text-shadow: 0 0 15px var(--accent-glow);
+}
+.title span { color: var(--text-dim); font-weight: 400; }
+
+#stats {
+  display: flex;
+  gap: 24px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.stat-val {
+  color: var(--accent);
+  font-weight: 700;
+  font-size: 14px;
+}
+
+#attack-log {
+  position: fixed;
+  bottom: 0; right: 0;
+  width: 520px;
+  max-height: 40vh;
+  z-index: 100;
+  padding: 8px 16px;
+  overflow: hidden;
+  background: linear-gradient(0deg, var(--log-bg-start) 0%, transparent 100%);
+  font-size: 11px;
+  line-height: 1.6;
+}
+.log-entry {
+  opacity: 0;
+  animation: fadeIn 0.3s ease forwards;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+.log-entry .time { color: var(--text-dim); }
+.log-entry .action { font-weight: 700; }
+.log-entry .color-ban { color: var(--ban); }
+.log-entry .color-sshd { color: var(--sshd); }
+.log-entry .color-aggressive { color: var(--aggressive); }
+.log-entry .color-portscan { color: var(--portscan); }
+.log-entry .color-ids-high { color: var(--ids-high); }
+.log-entry .color-ids-alert { color: var(--ids-alert); }
+.log-entry .host { color: var(--text-dim); }
+.log-entry .ip { color: var(--ip-color); }
+.log-entry .country { color: var(--text-muted); }
+.log-entry .city { color: var(--text-dim); font-style: italic; }
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateX(20px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+/* target marker is now SVG-based */
+
+#bottom-left {
+  position: fixed;
+  bottom: 16px; left: 16px;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+#legend {
+  font-size: 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: var(--panel-bg);
+  padding: 8px 12px;
+  border-radius: 4px;
+  color: var(--text-muted);
+}
+.legend-item { display: flex; align-items: center; gap: 8px; }
+.legend-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+#top-attackers {
+  font-size: 11px;
+  background: var(--panel-bg);
+  padding: 8px 12px;
+  border-radius: 4px;
+  color: var(--text-muted);
+  min-width: 160px;
+}
+#top-attackers .panel-title {
+  color: var(--panel-title);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 6px;
+}
+.top-entry {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  line-height: 1.8;
+}
+.top-entry .top-country { color: var(--top-country); }
+.top-entry .top-count { color: var(--accent); font-weight: 700; }
+
+#range-selector {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+}
+.range-opt {
+  padding: 3px 8px;
+  border-radius: 3px;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color 0.2s, background 0.2s;
+  user-select: none;
+}
+.range-opt:hover { color: var(--text); }
+.range-opt.active {
+  color: var(--accent);
+  background: var(--accent-bg);
+}
+#sound-toggle {
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 3px;
+  cursor: pointer;
+  color: var(--text-muted);
+  transition: color 0.2s, background 0.2s;
+  user-select: none;
+}
+#sound-toggle:hover { color: var(--text); }
+#sound-toggle.on { color: var(--accent); background: var(--accent-bg); }
+#tooltip {
+  position: absolute;
+  z-index: 300;
+  pointer-events: none;
+  background: var(--tooltip-bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 10px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text);
+  white-space: nowrap;
+  display: none;
+}
+#tooltip .tt-ip { color: var(--tooltip-ip); font-weight: 700; }
+#tooltip .tt-label { color: var(--tooltip-label); }
+#tooltip .tt-val { color: var(--text); }
+#tooltip .tt-action { font-weight: 700; }
+#tooltip .tt-ban { color: var(--ban); }
+#tooltip .tt-found { color: var(--sshd); }
+#tooltip .tt-ids-high { color: var(--ids-high); }
+#tooltip .tt-ids-alert { color: var(--ids-alert); }
+
+#no-data {
+  position: fixed;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 200;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 14px;
+  display: none;
+}
+#no-data .spinner {
+  width: 32px; height: 32px;
+  border: 2px solid var(--spinner-border);
+  border-top-color: var(--ban);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  margin: 0 auto 12px;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+@media (max-width: 768px) {
+  #map-wrapper { top: 36px; left: 0; right: 0; bottom: 0; }
+  #header {
+    padding: 6px 10px;
+    flex-wrap: wrap;
+    gap: 2px;
+  }
+  .title { font-size: 12px; letter-spacing: 1px; }
+  .title span { display: none; }
+  #stats { gap: 8px; font-size: 9px; flex-wrap: wrap; }
+  .stat-val { font-size: 10px; }
+  #attack-log {
+    width: 100%;
+    left: 0; right: 0;
+    font-size: 8px;
+    padding: 4px 8px;
+    max-height: 15vh;
+    line-height: 1.4;
+    overflow: hidden;
+  }
+  #bottom-left { display: none !important; }
+  .range-opt { font-size: 9px; padding: 2px 5px; }
+  #sound-toggle { font-size: 11px; }
+}
+</style>
+</head>
+<body>
+
+<div id="header">
+  <div class="title">Bombeck.io <span>— Attack Map</span></div>
+  <div id="stats">
+    <div>Events: <span class="stat-val" id="stat-total">—</span></div>
+    <div>Bans: <span class="stat-val" id="stat-bans" style="color:var(--ban)">—</span></div>
+    <div>IDS: <span class="stat-val" id="stat-ids" style="color:var(--ids-high)">—</span></div>
+    <div>Found: <span class="stat-val" id="stat-found">—</span></div>
+    <div>IPs: <span class="stat-val" id="stat-ips">—</span></div>
+    <div>Countries: <span class="stat-val" id="stat-countries">—</span></div>
+    <div id="range-selector">
+      <span class="range-opt active" data-range="live">Live</span>
+      <span class="range-opt" data-range="1h">1h</span>
+      <span class="range-opt" data-range="6h">6h</span>
+      <span class="range-opt" data-range="24h">24h</span>
+      <span id="sound-toggle" title="Sound an/aus">&#9834;</span>
+    </div>
+  </div>
+</div>
+
+<div id="map-wrapper">
+  <div id="map-container"></div>
+  <div id="tooltip"></div>
+</div>
+
+<div id="attack-log"></div>
+
+<div id="bottom-left">
+  <div id="top-attackers">
+    <div class="panel-title">Top Countries</div>
+    <div id="top-list"></div>
+  </div>
+</div>
+
+<div id="no-data">
+  <div class="spinner"></div>
+  Warte auf Angriffe...
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/3.5.17/d3.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/topojson/1.6.20/topojson.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/datamaps/0.5.9/datamaps.world.min.js"></script>
+
+<script>
+(function() {
+  "use strict";
+
+  function css(name) {
+    return getComputedStyle(document.body).getPropertyValue(name).trim();
+  }
+
+  function getColors() {
+    return {
+      ban: css("--ban"),
+      sshd: css("--sshd"),
+      aggressive: css("--aggressive"),
+      portscan: css("--portscan"),
+      idsHigh: css("--ids-high"),
+      idsAlert: css("--ids-alert"),
+      border: css("--border"),
+      land: css("--land"),
+      mapBorder: css("--map-border"),
+      targetStroke: css("--target-stroke"),
+      targetPulse: css("--target-pulse"),
+      targetFill: css("--target-fill"),
+    };
+  }
+
+  var colors = getColors();
+  var MAX_LOG = 20;
+  var POLL_INTERVAL = 10000;
+  var ARC_DELAY = 800;
+  var ARC_LIFETIME = 5000;
+  var BAN_LIFETIME = 10000;
+  var IDS_LIFETIME = 8000;
+  var INITIAL_SHOW = 10;
+
+  var map = null;
+  var queue = [];
+  var seenTimestamps = new Set();
+  var animating = false;
+  var firstLoad = true;
+  var currentRange = "live";
+  var soundEnabled = false;
+  var audioCtx = null;
+  var pollTimer = null;
+  var lastAttacks = [];     // last fetched attacks list
+  var pinnedTooltip = null; // currently pinned tooltip data {attack, svgX, svgY, dotEl}
+
+  function sizeContainer() {
+    var wrapper = document.getElementById("map-wrapper");
+    var container = document.getElementById("map-container");
+    var ww = wrapper.clientWidth;
+    var wh = wrapper.clientHeight;
+    var mw, mh;
+    if (ww / wh > 2) {
+      mh = wh;
+      mw = mh * 2;
+    } else {
+      mw = ww;
+      mh = mw / 2;
+    }
+    container.style.width = mw + "px";
+    container.style.height = mh + "px";
+  }
+
+  function initMap() {
+    var container = document.getElementById("map-container");
+    sizeContainer();
+    map = new Datamap({
+      scope: "world",
+      element: container,
+      projection: "equirectangular",
+      setProjection: function(element) {
+        var w = element.offsetWidth;
+        var h = element.offsetHeight;
+        var projection = d3.geo.equirectangular()
+          .scale(w / (2 * Math.PI) * 0.90)
+          .translate([w / 2, h * 0.46])
+          .precision(0.1);
+        var path = d3.geo.path().projection(projection);
+        return { path: path, projection: projection };
+      },
+      fills: { defaultFill: colors.land },
+      geographyConfig: {
+        hideAntarctica: true,
+        borderWidth: 0.6,
+        borderColor: colors.mapBorder,
+        popupOnHover: false,
+        highlightOnHover: false,
+      },
+    });
+
+    var svg = d3.select("#map-container svg");
+    // Better anti-aliasing for smooth arc lines
+    svg.attr("shape-rendering", "geometricPrecision");
+
+    // SVG target marker (pulsing circle at destination)
+    var proj = map.projection;
+    var tgt = proj([7.2162, 51.4818]);
+    if (tgt) {
+      var tgtGroup = svg.append("g").attr("class", "target-marker-svg");
+      // Pulsing ring
+      tgtGroup.append("circle")
+        .attr("cx", tgt[0]).attr("cy", tgt[1])
+        .attr("r", 4)
+        .style("fill", "none")
+        .style("stroke", colors.targetStroke)
+        .style("stroke-width", "1.5px");
+      // Animate the pulse ring
+      var pulseRing = tgtGroup.append("circle")
+        .attr("cx", tgt[0]).attr("cy", tgt[1])
+        .attr("r", 3)
+        .style("fill", "none")
+        .style("stroke", colors.targetPulse)
+        .style("stroke-width", "1px");
+      (function animatePulse() {
+        pulseRing
+          .attr("r", 3)
+          .style("stroke-opacity", "0.5")
+          .transition().duration(2000).ease("cubic-out")
+          .attr("r", 8)
+          .style("stroke-opacity", "0")
+          .each("end", animatePulse);
+      })();
+      // Center dot
+      tgtGroup.append("circle")
+        .attr("cx", tgt[0]).attr("cy", tgt[1])
+        .attr("r", 2)
+        .style("fill", colors.targetFill);
+    }
+  }
+
+  function formatTime(a) {
+    if (a.ts_epoch) {
+      return new Date(a.ts_epoch).toLocaleTimeString("de-DE", {
+        timeZone: "Europe/Berlin",
+        hour: "2-digit", minute: "2-digit", second: "2-digit"
+      });
+    }
+    return a.ts ? a.ts.split(" ")[1] || "" : "";
+  }
+
+  function isIDS(attack) {
+    return attack.source === "ids";
+  }
+
+  function isBan(action) {
+    return action === "Ban" || action === "Restore Ban";
+  }
+
+  function attackColor(attack) {
+    if (isIDS(attack)) {
+      return attack.action === "IDS High" ? colors.idsHigh : colors.idsAlert;
+    }
+    if (isBan(attack.action)) return colors.ban;
+    var jail = attack.jail;
+    if (jail.indexOf("aggressive") !== -1) return colors.aggressive;
+    if (jail.indexOf("portscan") !== -1) return colors.portscan;
+    return colors.sshd;
+  }
+
+  function attackLifetime(attack) {
+    if (isIDS(attack)) return IDS_LIFETIME;
+    if (isBan(attack.action)) return BAN_LIFETIME;
+    return ARC_LIFETIME;
+  }
+
+  function fireAttack(attack) {
+    if (document.hidden) return;
+
+    var svg = d3.select("#map-container svg");
+    var proj = map.projection;
+    var color = attackColor(attack);
+    var ban = isBan(attack.action);
+    var ids = isIDS(attack);
+    var lifetime = attackLifetime(attack);
+
+    var src = proj([attack.src_lon, attack.src_lat]);
+    var dst = proj([attack.dst_lon, attack.dst_lat]);
+    if (!src || !dst) return;
+
+    var cx = (src[0] + dst[0]) / 2;
+    var arcHeight = Math.max(Math.abs(dst[0] - src[0]) * 0.18, 20);
+    var cy = (src[1] + dst[1]) / 2 - arcHeight;
+    var pathD = "M" + src[0] + "," + src[1] + " Q" + cx + "," + cy + " " + dst[0] + "," + dst[1];
+
+    // --- Glowing arc trail ---
+    var trail = svg.append("path")
+      .attr("d", pathD)
+      .style("fill", "none")
+      .style("stroke", color)
+      .style("stroke-width", "2px")
+      .style("stroke-opacity", "0.55")
+      .style("stroke-linecap", "round")
+      .style("stroke-linejoin", "round");
+
+    var totalLength = trail.node().getTotalLength();
+    trail
+      .style("stroke-dasharray", totalLength + " " + totalLength)
+      .style("stroke-dashoffset", totalLength)
+      .transition()
+      .duration(1200)
+      .ease("cubic-out")
+      .styleTween("stroke-dashoffset", function() {
+        return d3.interpolateString(totalLength + "px", "0px");
+      });
+
+    // --- Bright projectile dot traveling along path ---
+    var dot = svg.append("circle")
+      .attr("r", 2.5)
+      .style("fill", color)
+      .style("fill-opacity", "1")
+;
+
+    dot.transition()
+      .duration(1200)
+      .ease("cubic-out")
+      .attrTween("cx", function() {
+        return function(t) {
+          var p = trail.node().getPointAtLength(t * totalLength);
+          return p.x;
+        };
+      })
+      .attrTween("cy", function() {
+        return function(t) {
+          var p = trail.node().getPointAtLength(t * totalLength);
+          return p.y;
+        };
+      })
+      .each("end", function() {
+        d3.select(this).remove();
+        spawnImpact(svg, dst, color, ban || ids);
+      });
+
+    // --- Source pulse ---
+    var srcPulse = svg.append("circle")
+      .attr("cx", src[0]).attr("cy", src[1])
+      .attr("r", 2)
+      .style("fill", color)
+      .style("fill-opacity", "0.8")
+;
+
+    srcPulse.transition().duration(600)
+      .attr("r", 6).style("fill-opacity", "0")
+      .remove();
+
+    // Small persistent source dot (interactive)
+    var srcDot = svg.append("circle")
+      .attr("class", "src-dot")
+      .attr("cx", src[0]).attr("cy", src[1])
+      .attr("r", 1.5)
+      .style("fill", color)
+      .style("fill-opacity", "0.5");
+
+    // Invisible larger hit area for easy hovering/clicking
+    var hitArea = svg.append("circle")
+      .attr("class", "src-hit")
+      .attr("cx", src[0]).attr("cy", src[1])
+      .attr("r", 8)
+      .style("fill", "transparent")
+      .style("stroke", "none")
+      .style("cursor", "pointer")
+      .style("pointer-events", "all");
+
+    hitArea.on("mouseenter", (function(a, sx, sy, dotEl) {
+      return function() {
+        if (!pinnedTooltip) {
+          showTooltip(a, sx, sy);
+        }
+        dotEl.attr("r", 4).style("fill-opacity", "0.9");
+      };
+    })(attack, src[0], src[1], srcDot));
+    hitArea.on("mouseleave", (function(dotEl) {
+      return function() {
+        if (!pinnedTooltip) {
+          hideTooltip();
+        }
+        dotEl.attr("r", 1.5).style("fill-opacity", "0.5");
+      };
+    })(srcDot));
+    hitArea.on("click", (function(a, sx, sy, dotEl) {
+      return function() {
+        d3.event.stopPropagation();
+        if (pinnedTooltip && pinnedTooltip.dotEl === dotEl) {
+          unpinTooltip();
+        } else {
+          pinTooltip(a, sx, sy, dotEl);
+        }
+      };
+    })(attack, src[0], src[1], srcDot));
+
+    // --- Cleanup ---
+    setTimeout(function() {
+      trail.transition().duration(2000).style("stroke-opacity", "0").remove();
+      srcDot.transition().duration(2000).style("fill-opacity", "0")
+        .each("end", function() { d3.select(this).remove(); });
+      hitArea.transition().delay(2000).remove();
+    }, lifetime);
+
+    addLogEntry(attack);
+  }
+
+  function spawnImpact(svg, dst, color, ban) {
+    if (ban) playPew();
+
+    if (ban) {
+      // Ban/IDS: big dramatic impact
+      // Bright flash
+      svg.append("circle")
+        .attr("cx", dst[0]).attr("cy", dst[1])
+        .attr("r", 8)
+        .style("fill", "#ffffff")
+        .style("fill-opacity", "0.8")
+        .transition().duration(400)
+        .attr("r", 2)
+        .style("fill-opacity", "0")
+        .remove();
+
+      // Ring 1 — fast, bright
+      svg.append("circle")
+        .attr("cx", dst[0]).attr("cy", dst[1])
+        .attr("r", 3)
+        .style("fill", "none")
+        .style("stroke", color)
+        .style("stroke-width", "2.5px")
+        .style("stroke-opacity", "1")
+        .transition().duration(600).ease("cubic-out")
+        .attr("r", 24)
+        .style("stroke-opacity", "0")
+        .style("stroke-width", "0.5px")
+        .remove();
+
+      // Ring 2 — medium
+      svg.append("circle")
+        .attr("cx", dst[0]).attr("cy", dst[1])
+        .attr("r", 2)
+        .style("fill", "none")
+        .style("stroke", color)
+        .style("stroke-width", "2px")
+        .style("stroke-opacity", "0.8")
+        .transition().delay(80).duration(700).ease("cubic-out")
+        .attr("r", 32)
+        .style("stroke-opacity", "0")
+        .remove();
+
+      // Ring 3 — slow, wide
+      svg.append("circle")
+        .attr("cx", dst[0]).attr("cy", dst[1])
+        .attr("r", 4)
+        .style("fill", "none")
+        .style("stroke", color)
+        .style("stroke-width", "1.2px")
+        .style("stroke-opacity", "0.5")
+        .transition().delay(200).duration(900).ease("cubic-out")
+        .attr("r", 42)
+        .style("stroke-opacity", "0")
+        .remove();
+
+      // Filled burst
+      svg.append("circle")
+        .attr("cx", dst[0]).attr("cy", dst[1])
+        .attr("r", 5)
+        .style("fill", color)
+        .style("fill-opacity", "0.4")
+        .transition().duration(500).ease("cubic-out")
+        .attr("r", 15)
+        .style("fill-opacity", "0")
+        .remove();
+
+      // Center glow dot that lingers
+      svg.append("circle")
+        .attr("cx", dst[0]).attr("cy", dst[1])
+        .attr("r", 4)
+        .style("fill", color)
+        .style("fill-opacity", "0.9")
+        .transition().delay(300).duration(1500)
+        .attr("r", 1)
+        .style("fill-opacity", "0")
+        .remove();
+
+    } else {
+      // Found: subtle impact
+      svg.append("circle")
+        .attr("cx", dst[0]).attr("cy", dst[1])
+        .attr("r", 2)
+        .style("fill", "none")
+        .style("stroke", color)
+        .style("stroke-width", "1.5px")
+        .style("stroke-opacity", "0.7")
+        .transition().duration(500).ease("cubic-out")
+        .attr("r", 10)
+        .style("stroke-opacity", "0")
+        .style("stroke-width", "0.5px")
+        .remove();
+
+      svg.append("circle")
+        .attr("cx", dst[0]).attr("cy", dst[1])
+        .attr("r", 3)
+        .style("fill", "none")
+        .style("stroke", color)
+        .style("stroke-width", "0.8px")
+        .style("stroke-opacity", "0.35")
+        .transition().delay(100).duration(700).ease("cubic-out")
+        .attr("r", 16)
+        .style("stroke-opacity", "0")
+        .remove();
+
+      svg.append("circle")
+        .attr("cx", dst[0]).attr("cy", dst[1])
+        .attr("r", 3)
+        .style("fill", "#ffffff")
+        .style("fill-opacity", "0.35")
+        .transition().duration(300)
+        .attr("r", 1)
+        .style("fill-opacity", "0")
+        .remove();
+    }
+  }
+
+  function showTooltip(a, svgX, svgY) {
+    var tt = document.getElementById("tooltip");
+    var container = document.getElementById("map-container");
+    var actionClass = isIDS(a) ? (a.action === "IDS High" ? "tt-ids-high" : "tt-ids-alert") : (isBan(a.action) ? "tt-ban" : "tt-found");
+    var time = formatTime(a);
+    tt.innerHTML =
+      '<div><span class="tt-ip">' + a.ip + '</span></div>' +
+      '<div><span class="tt-label">Action: </span><span class="tt-action ' + actionClass + '">' + a.action + '</span> <span class="tt-val">' + a.jail + '</span></div>' +
+      '<div><span class="tt-label">Location: </span><span class="tt-val">' + (a.city ? a.city + ', ' : '') + a.country + ' (' + a.cc + ')</span></div>' +
+      (a.isp ? '<div><span class="tt-label">ISP: </span><span class="tt-val">' + a.isp + '</span></div>' : '') +
+      (a.host ? '<div><span class="tt-label">Target: </span><span class="tt-val">' + a.host + '</span></div>' : '') +
+      (a.signature ? '<div><span class="tt-label">Signature: </span><span class="tt-val">' + a.signature + '</span></div>' : '') +
+      (time ? '<div><span class="tt-label">Time: </span><span class="tt-val">' + time + '</span></div>' : '');
+
+    tt.style.display = "block";
+    var wrapRect = document.getElementById("map-wrapper").getBoundingClientRect();
+    var px = container.offsetLeft + svgX + 12;
+    var py = container.offsetTop + svgY - 10;
+    if (px + tt.offsetWidth > wrapRect.width) {
+      px = container.offsetLeft + svgX - tt.offsetWidth - 12;
+    }
+    tt.style.left = px + "px";
+    tt.style.top = py + "px";
+  }
+
+  function hideTooltip() {
+    document.getElementById("tooltip").style.display = "none";
+  }
+
+  function pinTooltip(a, svgX, svgY, dotEl) {
+    if (pinnedTooltip && pinnedTooltip.dotEl) {
+      pinnedTooltip.dotEl.attr("r", 1.5).style("fill-opacity", "0.5");
+    }
+    showTooltip(a, svgX, svgY);
+    dotEl.attr("r", 4).style("fill-opacity", "0.9");
+    pinnedTooltip = { attack: a, svgX: svgX, svgY: svgY, dotEl: dotEl };
+  }
+
+  function unpinTooltip() {
+    if (pinnedTooltip && pinnedTooltip.dotEl) {
+      pinnedTooltip.dotEl.attr("r", 1.5).style("fill-opacity", "0.5");
+    }
+    pinnedTooltip = null;
+    hideTooltip();
+  }
+
+  function logColorClass(a) {
+    if (isIDS(a)) return a.action === "IDS High" ? "color-ids-high" : "color-ids-alert";
+    if (isBan(a.action)) return "color-ban";
+    if (a.jail.indexOf("aggressive") !== -1) return "color-aggressive";
+    if (a.jail.indexOf("portscan") !== -1) return "color-portscan";
+    return "color-sshd";
+  }
+
+  function addLogEntry(a) {
+    var log = document.getElementById("attack-log");
+    var el = document.createElement("div");
+    el.className = "log-entry";
+    var time = formatTime(a);
+    var cc = logColorClass(a);
+    el.innerHTML =
+      '<span class="time">' + time + '</span> ' +
+      '<span class="action ' + cc + '">' + (a.action || "?") + '</span> ' +
+      '<span class="' + cc + '">' + a.jail + '</span> ' +
+      (a.host ? '<span class="host">' + a.host + '</span> ' : '') +
+      '<span class="ip">' + a.ip + '</span> ' +
+      '<span class="country">' + a.cc + '</span> ' +
+      '<span class="city">' + (a.city || "") + '</span>';
+
+    log.insertBefore(el, log.firstChild);
+    while (log.children.length > MAX_LOG) {
+      log.removeChild(log.lastChild);
+    }
+  }
+
+  function playPew() {
+    if (!soundEnabled) return;
+    try {
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      var osc = audioCtx.createOscillator();
+      var gain = audioCtx.createGain();
+      osc.type = "sine";
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.frequency.setValueAtTime(900, audioCtx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(150, audioCtx.currentTime + 0.12);
+      gain.gain.setValueAtTime(0.08, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.12);
+      osc.start();
+      osc.stop(audioCtx.currentTime + 0.12);
+    } catch(e) {}
+  }
+
+  function showStaticDots(attacks) {
+    var svg = d3.select("#map-container svg");
+    svg.selectAll(".static-dot,.static-hit").remove();
+    var proj = map.projection;
+    for (var i = 0; i < attacks.length; i++) {
+      var a = attacks[i];
+      var src = proj([a.src_lon, a.src_lat]);
+      if (!src) continue;
+      var color = attackColor(a);
+      var dot = svg.append("circle")
+        .attr("class", "static-dot")
+        .attr("cx", src[0]).attr("cy", src[1])
+        .attr("r", 1.5)
+        .style("fill", color)
+        .style("fill-opacity", "0.6");
+
+      var hit = svg.append("circle")
+        .attr("class", "static-hit")
+        .attr("cx", src[0]).attr("cy", src[1])
+        .attr("r", 8)
+        .style("fill", "transparent")
+        .style("stroke", "none")
+        .style("cursor", "pointer")
+        .style("pointer-events", "all");
+
+      hit.on("mouseenter", (function(att, sx, sy, dotEl) {
+        return function() {
+          if (!pinnedTooltip) showTooltip(att, sx, sy);
+          dotEl.attr("r", 4).style("fill-opacity", "0.9");
+        };
+      })(a, src[0], src[1], dot));
+      hit.on("mouseleave", (function(dotEl) {
+        return function() {
+          if (!pinnedTooltip) hideTooltip();
+          dotEl.attr("r", 1.5).style("fill-opacity", "0.6");
+        };
+      })(dot));
+      hit.on("click", (function(att, sx, sy, dotEl) {
+        return function() {
+          d3.event.stopPropagation();
+          if (pinnedTooltip && pinnedTooltip.dotEl === dotEl) {
+            unpinTooltip();
+          } else {
+            pinTooltip(att, sx, sy, dotEl);
+          }
+        };
+      })(a, src[0], src[1], dot));
+    }
+  }
+
+  function updateTopAttackers(attacks) {
+    var cc = {};
+    for (var i = 0; i < attacks.length; i++) {
+      var c = attacks[i].country + " (" + attacks[i].cc + ")";
+      cc[c] = (cc[c] || 0) + 1;
+    }
+    var sorted = Object.keys(cc).sort(function(a, b) { return cc[b] - cc[a]; }).slice(0, 5);
+    var html = "";
+    for (var j = 0; j < sorted.length; j++) {
+      html += '<div class="top-entry"><span class="top-country">' + sorted[j] + '</span><span class="top-count">' + cc[sorted[j]] + '</span></div>';
+    }
+    document.getElementById("top-list").innerHTML = html || '<span style="color:var(--text-dim)">Keine Daten</span>';
+  }
+
+  function updateStats(attacks) {
+    var ips = {};
+    var countries = {};
+    var bans = 0;
+    var found = 0;
+    var ids = 0;
+    for (var i = 0; i < attacks.length; i++) {
+      ips[attacks[i].ip] = true;
+      countries[attacks[i].cc] = true;
+      if (isIDS(attacks[i])) ids++;
+      else if (isBan(attacks[i].action)) bans++;
+      else found++;
+    }
+    document.getElementById("stat-total").textContent = attacks.length;
+    document.getElementById("stat-bans").textContent = bans;
+    document.getElementById("stat-ids").textContent = ids;
+    document.getElementById("stat-found").textContent = found;
+    document.getElementById("stat-ips").textContent = Object.keys(ips).length;
+    document.getElementById("stat-countries").textContent = Object.keys(countries).length;
+  }
+
+  function processQueue() {
+    if (queue.length === 0) {
+      animating = false;
+      return;
+    }
+    animating = true;
+    var attack = queue.shift();
+    fireAttack(attack);
+    // Faster replay in history mode (~3 per second)
+    var delay = (currentRange === "live") ? ARC_DELAY : 350;
+    setTimeout(processQueue, delay);
+  }
+
+  function pollAttacks() {
+    var url = "/api/attacks";
+    if (currentRange !== "live") url += "?range=" + currentRange;
+
+    fetch(url)
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        var attacks = data.attacks || [];
+
+        if (attacks.length === 0 && firstLoad) {
+          document.getElementById("no-data").style.display = "block";
+          return;
+        }
+        document.getElementById("no-data").style.display = "none";
+        lastAttacks = attacks;
+        updateStats(attacks);
+        updateTopAttackers(attacks);
+
+        var newAttacks = [];
+        for (var i = 0; i < attacks.length; i++) {
+          var a = attacks[i];
+          var key = a.ts + "|" + a.ip + "|" + a.jail + "|" + a.action;
+          if (!seenTimestamps.has(key)) {
+            seenTimestamps.add(key);
+            newAttacks.push(a);
+          }
+        }
+
+        if (firstLoad) {
+          firstLoad = false;
+          if (currentRange === "live") {
+            newAttacks = newAttacks.slice(-INITIAL_SHOW);
+          }
+        }
+
+        for (var j = 0; j < newAttacks.length; j++) {
+          queue.push(newAttacks[j]);
+        }
+
+        if (!animating && queue.length > 0) {
+          processQueue();
+        }
+
+        if (seenTimestamps.size > 2000) {
+          var arr = [];
+          seenTimestamps.forEach(function(v) { arr.push(v); });
+          seenTimestamps = new Set(arr.slice(-1000));
+        }
+      })
+      .catch(function(err) {
+        console.error("API error:", err);
+      });
+  }
+
+  function switchRange(range) {
+    currentRange = range;
+    // Update active class
+    var opts = document.querySelectorAll(".range-opt");
+    for (var i = 0; i < opts.length; i++) {
+      opts[i].classList.toggle("active", opts[i].getAttribute("data-range") === range);
+    }
+    // Clear log, queue, tooltip and static dots on switch
+    document.getElementById("attack-log").innerHTML = "";
+    pinnedTooltip = null;
+    hideTooltip();
+    queue = [];
+    seenTimestamps.clear();
+    lastAttacks = [];
+    d3.select("#map-container svg").selectAll(".static-dot,.static-hit").remove();
+    firstLoad = (range === "live");
+    // Reset poll timer
+    if (pollTimer) clearInterval(pollTimer);
+    pollAttacks();
+    if (range === "live") {
+      pollTimer = setInterval(pollAttacks, POLL_INTERVAL);
+    }
+  }
+
+  var resizeTimer;
+  window.addEventListener("resize", function() {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(function() {
+      var container = document.getElementById("map-container");
+      container.innerHTML = "";
+      initMap();
+    }, 300);
+  });
+
+  // Range selector
+  var rangeOpts = document.querySelectorAll(".range-opt");
+  for (var ri = 0; ri < rangeOpts.length; ri++) {
+    rangeOpts[ri].addEventListener("click", function() {
+      switchRange(this.getAttribute("data-range"));
+    });
+  }
+
+  // Theme toggle
+  // Sound toggle
+  document.getElementById("sound-toggle").addEventListener("click", function() {
+    soundEnabled = !soundEnabled;
+    this.classList.toggle("on", soundEnabled);
+    this.title = soundEnabled ? "Sound aus" : "Sound an";
+    if (soundEnabled && !audioCtx) {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+  });
+
+  // Click anywhere else to dismiss pinned tooltip
+  document.addEventListener("click", function(e) {
+    if (pinnedTooltip && !e.target.closest("#tooltip")) {
+      unpinTooltip();
+    }
+  });
+
+  document.getElementById("no-data").style.display = "block";
+  initMap();
+  pollAttacks();
+  pollTimer = setInterval(pollAttacks, POLL_INTERVAL);
+
+})();
+</script>
+</body>
+</html>

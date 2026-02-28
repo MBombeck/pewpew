@@ -1,0 +1,358 @@
+#!/usr/bin/env python3
+"""Attack Map backend — queries Loki for fail2ban ban events and UDM IDS alerts."""
+import ipaddress
+import json
+import os
+import re
+import time
+import threading
+import urllib.request
+
+import requests
+from flask import Flask, jsonify, request, send_from_directory, make_response
+
+app = Flask(__name__, static_folder="static")
+
+
+@app.after_request
+def no_cache(response):
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
+
+LOKI_URL = os.environ.get("LOKI_URL", "http://loki:3100")
+LOKI_USER = os.environ.get("LOKI_USER", "")
+LOKI_PASS = os.environ.get("LOKI_PASS", "")
+QUERY_INTERVAL = int(os.environ.get("QUERY_INTERVAL", "30"))
+QUERY_RANGE = os.environ.get("QUERY_RANGE", "1h")
+# Bochum coordinates (target for all arcs)
+TARGET_LAT = float(os.environ.get("TARGET_LAT", "51.4818"))
+TARGET_LON = float(os.environ.get("TARGET_LON", "7.2162"))
+
+_cache = {"attacks": [], "last_update": 0, "total_bans": 0}
+_lock = threading.Lock()
+
+# GeoIP cache (in-memory, survives across poll cycles)
+_geoip_cache = {}
+_geoip_lock = threading.Lock()
+
+VALID_RANGES = {"1h", "6h", "24h"}
+
+# CEF extension key=value parser (handles values with spaces before next key=)
+CEF_EXT_RE = re.compile(r"(\w+)=(.*?)(?=\s+\w+=|$)")
+
+
+def is_public_ip(ip_str):
+    """Check if an IP address is public (not private/reserved)."""
+    try:
+        ip = ipaddress.ip_address(ip_str)
+        return ip.is_global
+    except ValueError:
+        return False
+
+
+def parse_cef(line):
+    """Parse a CEF-formatted log line into a dict of extension fields."""
+    if not line.startswith("CEF:"):
+        return None
+    # Split header: CEF:version|vendor|product|version|event_id|name|severity|extensions
+    parts = line.split("|", 7)
+    if len(parts) < 8:
+        return None
+    result = {
+        "cef_vendor": parts[1],
+        "cef_product": parts[2],
+        "cef_event_id": parts[4],
+        "cef_name": parts[5],
+        "cef_severity": parts[6],
+    }
+    ext_str = parts[7]
+    for m in CEF_EXT_RE.finditer(ext_str):
+        result[m.group(1)] = m.group(2).strip()
+    return result
+
+
+def geoip_batch(ips):
+    """Lookup GeoIP data for a batch of IPs using ip-api.com."""
+    with _geoip_lock:
+        new_ips = [ip for ip in ips if ip not in _geoip_cache]
+
+    if not new_ips:
+        with _geoip_lock:
+            return {ip: _geoip_cache[ip] for ip in ips if ip in _geoip_cache}
+
+    for i in range(0, len(new_ips), 100):
+        batch = new_ips[i:i + 100]
+        body = json.dumps(
+            [{"query": ip, "fields": "status,country,countryCode,city,isp,lat,lon"} for ip in batch]
+        ).encode()
+        req = urllib.request.Request(
+            "http://ip-api.com/batch", data=body,
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            resp = urllib.request.urlopen(req, timeout=10)
+            results = json.loads(resp.read())
+            with _geoip_lock:
+                for ip, r in zip(batch, results):
+                    if r.get("status") == "success":
+                        _geoip_cache[ip] = {
+                            "country": r["country"].replace("The Netherlands", "Netherlands"),
+                            "cc": r["countryCode"],
+                            "city": r.get("city", ""),
+                            "isp": r.get("isp", ""),
+                            "lat": r.get("lat", 0),
+                            "lon": r.get("lon", 0),
+                        }
+                    else:
+                        _geoip_cache[ip] = {
+                            "country": "Unknown", "cc": "??",
+                            "city": "", "isp": "",
+                            "lat": 0, "lon": 0,
+                        }
+            if i + 100 < len(new_ips):
+                time.sleep(2)  # ip-api.com rate limit
+        except Exception as e:
+            app.logger.error(f"GeoIP batch lookup failed: {e}")
+
+    with _geoip_lock:
+        return {ip: _geoip_cache[ip] for ip in ips if ip in _geoip_cache}
+
+
+def query_loki_f2b(since=None):
+    """Fetch recent fail2ban ban events from Loki."""
+    query = '{job="fail2ban_geo"} | json | action!="Unban"'
+    use_range = since if since in VALID_RANGES else QUERY_RANGE
+    limit = 200 if use_range == "1h" else 500 if use_range == "6h" else 1000
+    params = {
+        "query": query,
+        "limit": limit,
+        "since": use_range,
+    }
+    auth = None
+    if LOKI_USER and LOKI_PASS:
+        auth = (LOKI_USER, LOKI_PASS)
+
+    try:
+        resp = requests.get(
+            f"{LOKI_URL}/loki/api/v1/query_range",
+            params=params,
+            auth=auth,
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        app.logger.error(f"Loki fail2ban query failed: {e}")
+        return []
+
+    attacks = []
+    results = data.get("data", {}).get("result", [])
+    for stream in results:
+        labels = stream.get("stream", {})
+        for ts_ns, line in stream.get("values", []):
+            try:
+                ev = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            lat = ev.get("lat", 0)
+            lon = ev.get("lon", 0)
+            if lat == 0 and lon == 0:
+                continue
+
+            # Loki timestamp in nanoseconds -> milliseconds for JS Date
+            ts_ms = int(ts_ns) // 1000000
+            attacks.append({
+                "ts": ev.get("ts", ""),
+                "ts_epoch": ts_ms,
+                "ip": ev.get("ip", ""),
+                "jail": ev.get("jail", ""),
+                "action": ev.get("action", ""),
+                "country": ev.get("country", "Unknown"),
+                "cc": ev.get("cc", "??"),
+                "city": ev.get("city", ""),
+                "isp": ev.get("isp", ""),
+                "host": labels.get("host", ""),
+                "src_lat": lat,
+                "src_lon": lon,
+                "dst_lat": TARGET_LAT,
+                "dst_lon": TARGET_LON,
+                "source": "fail2ban",
+            })
+
+    return attacks
+
+
+def query_loki_ids(since=None):
+    """Fetch recent UDM IDS/IPS threat events from Loki."""
+    query = '{job="udm_pro"} |~ "Threat Detected"'
+    use_range = since if since in VALID_RANGES else QUERY_RANGE
+    limit = 200 if use_range == "1h" else 500 if use_range == "6h" else 1000
+    params = {
+        "query": query,
+        "limit": limit,
+        "since": use_range,
+    }
+    auth = None
+    if LOKI_USER and LOKI_PASS:
+        auth = (LOKI_USER, LOKI_PASS)
+
+    try:
+        resp = requests.get(
+            f"{LOKI_URL}/loki/api/v1/query_range",
+            params=params,
+            auth=auth,
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        app.logger.error(f"Loki IDS query failed: {e}")
+        return []
+
+    # Collect all external source IPs for batch GeoIP
+    raw_events = []
+    ips_to_lookup = set()
+
+    results = data.get("data", {}).get("result", [])
+    for stream in results:
+        for ts_ns, line in stream.get("values", []):
+            cef = parse_cef(line)
+            if not cef:
+                continue
+
+            # Only incoming threats (external attackers)
+            direction = cef.get("UNIFIdirection", "")
+            if direction != "incoming":
+                continue
+
+            src_ip = cef.get("src", "")
+            if not src_ip or not is_public_ip(src_ip):
+                continue
+
+            cef["_ts_ns"] = ts_ns
+            raw_events.append(cef)
+            ips_to_lookup.add(src_ip)
+
+    if not raw_events:
+        return []
+
+    # Batch GeoIP lookup
+    geo_results = geoip_batch(list(ips_to_lookup))
+
+    attacks = []
+    for cef in raw_events:
+        src_ip = cef.get("src", "")
+        geo = geo_results.get(src_ip, {})
+        lat = geo.get("lat", 0)
+        lon = geo.get("lon", 0)
+        if lat == 0 and lon == 0:
+            continue
+
+        # Map policy name to a jail-like category
+        policy = cef.get("UNIFIpolicyName", "IDS")
+        risk = cef.get("UNIFIrisk", "medium")
+        signature = cef.get("UNIFIipsSignature", "")
+        utc_time = cef.get("UNIFIutcTime", "")
+        dst_port = cef.get("dpt", "")
+        proto = cef.get("proto", "")
+
+        # Determine action label based on risk level
+        if risk == "high":
+            action = "IDS High"
+        else:
+            action = "IDS Alert"
+
+        ts_ms = int(cef.get("_ts_ns", "0")) // 1000000
+        attacks.append({
+            "ts": utc_time.replace("T", " ").replace("Z", "") if utc_time else "",
+            "ts_epoch": ts_ms,
+            "ip": src_ip,
+            "jail": policy,
+            "action": action,
+            "country": geo.get("country", "Unknown"),
+            "cc": geo.get("cc", cef.get("UNIFIsrcRegion", "??")),
+            "city": geo.get("city", ""),
+            "isp": geo.get("isp", ""),
+            "host": "UDMP",
+            "src_lat": lat,
+            "src_lon": lon,
+            "dst_lat": TARGET_LAT,
+            "dst_lon": TARGET_LON,
+            "source": "ids",
+            "signature": signature,
+            "dst_port": dst_port,
+            "proto": proto,
+        })
+
+    return attacks
+
+
+def query_all(since=None):
+    """Fetch both fail2ban and IDS events, merge and sort."""
+    f2b = query_loki_f2b(since)
+    ids = query_loki_ids(since)
+    combined = f2b + ids
+    combined.sort(key=lambda a: a.get("ts_epoch", 0))
+    return combined
+
+
+def poll_loop():
+    """Background thread that polls Loki."""
+    while True:
+        attacks = query_all()
+        with _lock:
+            _cache["attacks"] = attacks
+            _cache["last_update"] = time.time()
+            _cache["total_bans"] = len(attacks)
+        time.sleep(QUERY_INTERVAL)
+
+
+@app.route("/")
+def index():
+    return send_from_directory("static", "index.html")
+
+
+@app.route("/api/attacks")
+def get_attacks():
+    range_param = request.args.get("range", "")
+    if range_param and range_param in VALID_RANGES:
+        attacks = query_all(since=range_param)
+        return jsonify({
+            "attacks": attacks,
+            "total": len(attacks),
+            "last_update": time.time(),
+            "target": {"lat": TARGET_LAT, "lon": TARGET_LON},
+            "range": range_param,
+        })
+    with _lock:
+        return jsonify({
+            "attacks": _cache["attacks"],
+            "total": _cache["total_bans"],
+            "last_update": _cache["last_update"],
+            "target": {"lat": TARGET_LAT, "lon": TARGET_LON},
+            "range": "live",
+        })
+
+
+@app.route("/api/health")
+def health():
+    with _lock:
+        age = time.time() - _cache["last_update"] if _cache["last_update"] else -1
+    with _geoip_lock:
+        geo_cache_size = len(_geoip_cache)
+    return jsonify({
+        "status": "ok",
+        "cache_age_seconds": round(age, 1),
+        "geoip_cache_size": geo_cache_size,
+    })
+
+
+# Start poll thread
+poll_thread = threading.Thread(target=poll_loop, daemon=True)
+poll_thread.start()
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=8080, debug=False)

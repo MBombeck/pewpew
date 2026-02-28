@@ -1,0 +1,31 @@
+services:
+  attack-map:
+    build: .
+    container_name: attack-map
+    restart: unless-stopped
+    ports:
+      - "8091:8080"
+    environment:
+      - LOKI_URL=http://loki:3100
+      - QUERY_INTERVAL=30
+      - QUERY_RANGE=1h
+      - TARGET_LAT=51.4818
+      - TARGET_LON=7.2162
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.attack-map.rule=Host(`pewpew.bombeck.io`)"
+      - "traefik.http.routers.attack-map.entryPoints=https"
+      - "traefik.http.routers.attack-map.tls=true"
+      - "traefik.http.routers.attack-map.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.attack-map-http.rule=Host(`pewpew.bombeck.io`)"
+      - "traefik.http.routers.attack-map-http.entryPoints=http"
+      - "traefik.http.routers.attack-map-http.middlewares=redirect-to-https"
+      - "traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https"
+      - "traefik.http.services.attack-map.loadbalancer.server.port=8080"
+    networks:
+      - coolify
+
+networks:
+  coolify:
+    external: true
+    name: cogkc4scccwoggs4kwgwcwgg
