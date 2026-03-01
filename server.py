@@ -348,8 +348,12 @@ def query_cloudflare(since=None):
         app.logger.error(f"Cloudflare GraphQL query failed: {e}")
         return []
 
-    zones = data.get("data", {}).get("viewer", {}).get("zones", [])
+    viewer = (data.get("data") or {}).get("viewer") or {}
+    zones = viewer.get("zones", [])
     if not zones:
+        errors = data.get("errors", [])
+        if errors:
+            app.logger.error(f"Cloudflare GraphQL errors: {errors}")
         return []
 
     events = zones[0].get("firewallEventsAdaptive", [])
