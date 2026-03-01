@@ -195,6 +195,71 @@ def query_loki_f2b(since=None):
     return attacks
 
 
+def query_loki_crowdsec(since=None):
+    """Fetch recent CrowdSec ban events from Loki (GeoIP-enriched by crowdsec-geoip-log.sh)."""
+    query = '{job="crowdsec_geo"} | json'
+    use_range = since if since in VALID_RANGES else QUERY_RANGE
+    limit = 200 if use_range == "1h" else 500 if use_range == "6h" else 1000
+    params = {
+        "query": query,
+        "limit": limit,
+        "since": use_range,
+    }
+    auth = None
+    if LOKI_USER and LOKI_PASS:
+        auth = (LOKI_USER, LOKI_PASS)
+
+    try:
+        resp = requests.get(
+            f"{LOKI_URL}/loki/api/v1/query_range",
+            params=params,
+            auth=auth,
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        app.logger.error(f"Loki CrowdSec query failed: {e}")
+        return []
+
+    attacks = []
+    results = data.get("data", {}).get("result", [])
+    for stream in results:
+        labels = stream.get("stream", {})
+        for ts_ns, line in stream.get("values", []):
+            try:
+                ev = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            lat = ev.get("lat", 0)
+            lon = ev.get("lon", 0)
+            if lat == 0 and lon == 0:
+                continue
+
+            ts_ms = int(ts_ns) // 1000000
+            attacks.append({
+                "ts": ev.get("timestamp", ""),
+                "ts_epoch": ts_ms,
+                "ip": ev.get("ip", ""),
+                "jail": ev.get("jail", "crowdsec"),
+                "action": ev.get("action", "Ban"),
+                "country": ev.get("country", "Unknown"),
+                "cc": ev.get("country_code", "??"),
+                "city": ev.get("city", ""),
+                "isp": ev.get("isp", ""),
+                "host": labels.get("host", ev.get("host", "")),
+                "src_lat": lat,
+                "src_lon": lon,
+                "dst_lat": TARGET_LAT,
+                "dst_lon": TARGET_LON,
+                "source": "crowdsec",
+                "scenario": ev.get("scenario", ""),
+            })
+
+    return attacks
+
+
 def query_loki_ids(since=None):
     """Fetch recent UDM IDS/IPS threat events from Loki."""
     query = '{job="udm_pro"} |~ "Threat Detected"'
@@ -501,12 +566,13 @@ def query_uberspace(since=None):
 
 
 def query_all(since=None):
-    """Fetch fail2ban, IDS, Cloudflare, and Uberspace events, merge and sort."""
+    """Fetch fail2ban, CrowdSec, IDS, Cloudflare, and Uberspace events, merge and sort."""
     f2b = query_loki_f2b(since)
+    cs = query_loki_crowdsec(since)
     ids = query_loki_ids(since)
     cf = query_cloudflare(since)
     ub = query_uberspace(since)
-    combined = f2b + ids + cf + ub
+    combined = f2b + cs + ids + cf + ub
     combined.sort(key=lambda a: a.get("ts_epoch", 0))
     return combined
 
