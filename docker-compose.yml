@@ -11,6 +11,10 @@ services:
       - QUERY_RANGE=1h
       - TARGET_LAT=51.4818
       - TARGET_LON=7.2162
+      - CF_API_EMAIL=${CF_API_EMAIL}
+      - CF_API_KEY=${CF_API_KEY}
+      - CF_ZONE_ID=${CF_ZONE_ID}
+      - CF_OWN_IPS=46.225.76.2,78.47.241.164,159.69.23.98
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.attack-map.rule=Host(`pewpew.bombeck.io`)"
