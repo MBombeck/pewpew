@@ -303,10 +303,11 @@ def query_cloudflare(since=None):
         return []
 
     use_range = since if since in VALID_RANGES else QUERY_RANGE
-    range_hours = {"1h": 1, "6h": 6, "24h": 24}
-    hours = range_hours.get(use_range, 1)
-    dt_since = (datetime.now(timezone.utc) - timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    limit = 200 if hours <= 1 else 500 if hours <= 6 else 1000
+    # CF free plan: max 86400s strict (not <=), so use 23h55m for "24h"
+    range_minutes = {"1h": 60, "6h": 360, "24h": 1435}
+    minutes = range_minutes.get(use_range, 60)
+    dt_since = (datetime.now(timezone.utc) - timedelta(minutes=minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    limit = 200 if minutes <= 60 else 500 if minutes <= 360 else 1000
 
     query = """{
   viewer {
