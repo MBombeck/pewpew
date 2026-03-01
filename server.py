@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Attack Map backend — queries Loki for fail2ban ban events and UDM IDS alerts."""
+"""Attack Map backend — queries Loki for fail2ban ban events, UDM IDS alerts, and Cloudflare WAF events."""
 import ipaddress
 import json
 import os
@@ -7,6 +7,7 @@ import re
 import time
 import threading
 import urllib.request
+from datetime import datetime, timezone, timedelta
 
 import requests
 from flask import Flask, jsonify, request, send_from_directory, make_response
@@ -26,6 +27,12 @@ LOKI_USER = os.environ.get("LOKI_USER", "")
 LOKI_PASS = os.environ.get("LOKI_PASS", "")
 QUERY_INTERVAL = int(os.environ.get("QUERY_INTERVAL", "30"))
 QUERY_RANGE = os.environ.get("QUERY_RANGE", "1h")
+# Cloudflare GraphQL Analytics API
+CF_API_EMAIL = os.environ.get("CF_API_EMAIL", "")
+CF_API_KEY = os.environ.get("CF_API_KEY", "")
+CF_ZONE_ID = os.environ.get("CF_ZONE_ID", "")
+# Own IPs to filter from CF events (monitoring, VPN exits, servers)
+CF_OWN_IPS = set(os.environ.get("CF_OWN_IPS", "46.225.76.2,78.47.241.164,159.69.23.98").split(","))
 # Bochum coordinates (target for all arcs)
 TARGET_LAT = float(os.environ.get("TARGET_LAT", "51.4818"))
 TARGET_LON = float(os.environ.get("TARGET_LON", "7.2162"))
@@ -290,11 +297,130 @@ def query_loki_ids(since=None):
     return attacks
 
 
+def query_cloudflare(since=None):
+    """Fetch recent Cloudflare WAF block events via GraphQL Analytics API."""
+    if not CF_API_EMAIL or not CF_API_KEY or not CF_ZONE_ID:
+        return []
+
+    use_range = since if since in VALID_RANGES else QUERY_RANGE
+    range_hours = {"1h": 1, "6h": 6, "24h": 24}
+    hours = range_hours.get(use_range, 1)
+    dt_since = (datetime.now(timezone.utc) - timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    limit = 200 if hours <= 1 else 500 if hours <= 6 else 1000
+
+    query = """{
+  viewer {
+    zones(filter: {zoneTag: "%s"}) {
+      firewallEventsAdaptive(
+        filter: {
+          datetime_gt: "%s",
+          action_in: ["block", "managed_challenge", "js_challenge", "challenge", "drop"]
+        },
+        limit: %d,
+        orderBy: [datetime_DESC]
+      ) {
+        action
+        clientIP
+        clientCountryName
+        clientRequestHTTPHost
+        clientRequestPath
+        datetime
+        source
+      }
+    }
+  }
+}""" % (CF_ZONE_ID, dt_since, limit)
+
+    try:
+        resp = requests.post(
+            "https://api.cloudflare.com/client/v4/graphql",
+            json={"query": query},
+            headers={
+                "X-Auth-Email": CF_API_EMAIL,
+                "X-Auth-Key": CF_API_KEY,
+                "Content-Type": "application/json",
+            },
+            timeout=15,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        app.logger.error(f"Cloudflare GraphQL query failed: {e}")
+        return []
+
+    zones = data.get("data", {}).get("viewer", {}).get("zones", [])
+    if not zones:
+        return []
+
+    events = zones[0].get("firewallEventsAdaptive", [])
+    if not events:
+        return []
+
+    # Collect IPs for batch GeoIP (CF only gives country name, not coords)
+    ips_to_lookup = set()
+    filtered_events = []
+    for ev in events:
+        ip = ev.get("clientIP", "")
+        if not ip or ip in CF_OWN_IPS or not is_public_ip(ip):
+            continue
+        filtered_events.append(ev)
+        ips_to_lookup.add(ip)
+
+    if not filtered_events:
+        return []
+
+    geo_results = geoip_batch(list(ips_to_lookup))
+
+    attacks = []
+    for ev in filtered_events:
+        ip = ev.get("clientIP", "")
+        geo = geo_results.get(ip, {})
+        lat = geo.get("lat", 0)
+        lon = geo.get("lon", 0)
+        if lat == 0 and lon == 0:
+            continue
+
+        # Parse CF datetime to epoch ms
+        dt_str = ev.get("datetime", "")
+        try:
+            dt = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
+            ts_ms = int(dt.timestamp() * 1000)
+        except (ValueError, AttributeError):
+            ts_ms = 0
+
+        action = ev.get("action", "block").replace("_", " ").title()
+        cf_source = ev.get("source", "unknown")
+        host = ev.get("clientRequestHTTPHost", "")
+        path = ev.get("clientRequestPath", "")
+
+        attacks.append({
+            "ts": dt_str.replace("T", " ").replace("Z", "") if dt_str else "",
+            "ts_epoch": ts_ms,
+            "ip": ip,
+            "jail": cf_source,
+            "action": action,
+            "country": geo.get("country", ev.get("clientCountryName", "Unknown")),
+            "cc": geo.get("cc", "??"),
+            "city": geo.get("city", ""),
+            "isp": geo.get("isp", ""),
+            "host": host,
+            "src_lat": lat,
+            "src_lon": lon,
+            "dst_lat": TARGET_LAT,
+            "dst_lon": TARGET_LON,
+            "source": "cloudflare",
+            "path": path,
+        })
+
+    return attacks
+
+
 def query_all(since=None):
-    """Fetch both fail2ban and IDS events, merge and sort."""
+    """Fetch fail2ban, IDS, and Cloudflare events, merge and sort."""
     f2b = query_loki_f2b(since)
     ids = query_loki_ids(since)
-    combined = f2b + ids
+    cf = query_cloudflare(since)
+    combined = f2b + ids + cf
     combined.sort(key=lambda a: a.get("ts_epoch", 0))
     return combined
 

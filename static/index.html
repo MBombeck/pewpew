@@ -36,6 +36,7 @@
   --portscan: #50fa7b;
   --ids-high: #ff5555;
   --ids-alert: #f1fa8c;
+  --cf-block: #caa9fa;
   --target-stroke: rgba(189,147,249,0.4);
   --target-pulse: rgba(189,147,249,0.5);
   --target-fill: rgba(189,147,249,0.6);
@@ -126,6 +127,7 @@ body {
 .log-entry .color-portscan { color: var(--portscan); }
 .log-entry .color-ids-high { color: var(--ids-high); }
 .log-entry .color-ids-alert { color: var(--ids-alert); }
+.log-entry .color-cf-block { color: var(--cf-block); }
 .log-entry .host { color: var(--text-dim); }
 .log-entry .ip { color: var(--ip-color); }
 .log-entry .country { color: var(--text-muted); }
@@ -238,6 +240,7 @@ body {
 #tooltip .tt-found { color: var(--sshd); }
 #tooltip .tt-ids-high { color: var(--ids-high); }
 #tooltip .tt-ids-alert { color: var(--ids-alert); }
+#tooltip .tt-cf-block { color: var(--cf-block); }
 
 #no-data {
   position: fixed;
@@ -293,6 +296,7 @@ body {
     <div>Events: <span class="stat-val" id="stat-total">—</span></div>
     <div>Bans: <span class="stat-val" id="stat-bans" style="color:var(--ban)">—</span></div>
     <div>IDS: <span class="stat-val" id="stat-ids" style="color:var(--ids-high)">—</span></div>
+    <div>WAF: <span class="stat-val" id="stat-cf" style="color:var(--cf-block)">—</span></div>
     <div>Found: <span class="stat-val" id="stat-found">—</span></div>
     <div>IPs: <span class="stat-val" id="stat-ips">—</span></div>
     <div>Countries: <span class="stat-val" id="stat-countries">—</span></div>
@@ -314,6 +318,15 @@ body {
 <div id="attack-log"></div>
 
 <div id="bottom-left">
+  <div id="legend">
+    <div class="legend-item"><span class="legend-dot" style="background:var(--ban)"></span> Ban</div>
+    <div class="legend-item"><span class="legend-dot" style="background:var(--sshd)"></span> Found</div>
+    <div class="legend-item"><span class="legend-dot" style="background:var(--aggressive)"></span> Aggressive</div>
+    <div class="legend-item"><span class="legend-dot" style="background:var(--portscan)"></span> Portscan</div>
+    <div class="legend-item"><span class="legend-dot" style="background:var(--ids-high)"></span> IDS High</div>
+    <div class="legend-item"><span class="legend-dot" style="background:var(--ids-alert)"></span> IDS Alert</div>
+    <div class="legend-item"><span class="legend-dot" style="background:var(--cf-block)"></span> CF WAF</div>
+  </div>
   <div id="top-attackers">
     <div class="panel-title">Top Countries</div>
     <div id="top-list"></div>
@@ -345,6 +358,7 @@ body {
       portscan: css("--portscan"),
       idsHigh: css("--ids-high"),
       idsAlert: css("--ids-alert"),
+      cfBlock: css("--cf-block"),
       border: css("--border"),
       land: css("--land"),
       mapBorder: css("--map-border"),
@@ -473,11 +487,16 @@ body {
     return attack.source === "ids";
   }
 
+  function isCF(attack) {
+    return attack.source === "cloudflare";
+  }
+
   function isBan(action) {
     return action === "Ban" || action === "Restore Ban";
   }
 
   function attackColor(attack) {
+    if (isCF(attack)) return colors.cfBlock;
     if (isIDS(attack)) {
       return attack.action === "IDS High" ? colors.idsHigh : colors.idsAlert;
     }
@@ -488,7 +507,10 @@ body {
     return colors.sshd;
   }
 
+  var CF_LIFETIME = 8000;
+
   function attackLifetime(attack) {
+    if (isCF(attack)) return CF_LIFETIME;
     if (isIDS(attack)) return IDS_LIFETIME;
     if (isBan(attack.action)) return BAN_LIFETIME;
     return ARC_LIFETIME;
@@ -502,6 +524,7 @@ body {
     var color = attackColor(attack);
     var ban = isBan(attack.action);
     var ids = isIDS(attack);
+    var cf = isCF(attack);
     var lifetime = attackLifetime(attack);
 
     var src = proj([attack.src_lon, attack.src_lat]);
@@ -558,7 +581,7 @@ body {
       })
       .each("end", function() {
         d3.select(this).remove();
-        spawnImpact(svg, dst, color, ban || ids);
+        spawnImpact(svg, dst, color, ban || ids || cf);
       });
 
     // --- Source pulse ---
@@ -749,7 +772,7 @@ body {
   function showTooltip(a, svgX, svgY) {
     var tt = document.getElementById("tooltip");
     var container = document.getElementById("map-container");
-    var actionClass = isIDS(a) ? (a.action === "IDS High" ? "tt-ids-high" : "tt-ids-alert") : (isBan(a.action) ? "tt-ban" : "tt-found");
+    var actionClass = isCF(a) ? "tt-cf-block" : isIDS(a) ? (a.action === "IDS High" ? "tt-ids-high" : "tt-ids-alert") : (isBan(a.action) ? "tt-ban" : "tt-found");
     var time = formatTime(a);
     tt.innerHTML =
       '<div><span class="tt-ip">' + a.ip + '</span></div>' +
@@ -757,6 +780,7 @@ body {
       '<div><span class="tt-label">Location: </span><span class="tt-val">' + (a.city ? a.city + ', ' : '') + a.country + ' (' + a.cc + ')</span></div>' +
       (a.isp ? '<div><span class="tt-label">ISP: </span><span class="tt-val">' + a.isp + '</span></div>' : '') +
       (a.host ? '<div><span class="tt-label">Target: </span><span class="tt-val">' + a.host + '</span></div>' : '') +
+      (a.path ? '<div><span class="tt-label">Path: </span><span class="tt-val">' + a.path + '</span></div>' : '') +
       (a.signature ? '<div><span class="tt-label">Signature: </span><span class="tt-val">' + a.signature + '</span></div>' : '') +
       (time ? '<div><span class="tt-label">Time: </span><span class="tt-val">' + time + '</span></div>' : '');
 
@@ -793,6 +817,7 @@ body {
   }
 
   function logColorClass(a) {
+    if (isCF(a)) return "color-cf-block";
     if (isIDS(a)) return a.action === "IDS High" ? "color-ids-high" : "color-ids-alert";
     if (isBan(a.action)) return "color-ban";
     if (a.jail.indexOf("aggressive") !== -1) return "color-aggressive";
@@ -909,16 +934,19 @@ body {
     var bans = 0;
     var found = 0;
     var ids = 0;
+    var cf = 0;
     for (var i = 0; i < attacks.length; i++) {
       ips[attacks[i].ip] = true;
       countries[attacks[i].cc] = true;
-      if (isIDS(attacks[i])) ids++;
+      if (isCF(attacks[i])) cf++;
+      else if (isIDS(attacks[i])) ids++;
       else if (isBan(attacks[i].action)) bans++;
       else found++;
     }
     document.getElementById("stat-total").textContent = attacks.length;
     document.getElementById("stat-bans").textContent = bans;
     document.getElementById("stat-ids").textContent = ids;
+    document.getElementById("stat-cf").textContent = cf;
     document.getElementById("stat-found").textContent = found;
     document.getElementById("stat-ips").textContent = Object.keys(ips).length;
     document.getElementById("stat-countries").textContent = Object.keys(countries).length;
