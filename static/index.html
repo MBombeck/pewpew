@@ -36,7 +36,7 @@
   --portscan: #50fa7b;
   --ids-high: #ff5555;
   --ids-alert: #f1fa8c;
-  --cf-block: #caa9fa;
+  --cf-block: #e0976e;
   --target-stroke: rgba(189,147,249,0.4);
   --target-pulse: rgba(189,147,249,0.5);
   --target-fill: rgba(189,147,249,0.6);
@@ -54,7 +54,7 @@ body {
 
 #map-wrapper {
   position: absolute;
-  top: 100px; left: 180px; right: 180px; bottom: 100px;
+  top: 60px; left: 16px; right: 400px; bottom: 16px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -101,13 +101,13 @@ body {
 
 #attack-log {
   position: fixed;
-  bottom: 0; right: 0;
-  width: 520px;
-  max-height: 40vh;
+  top: 60px; bottom: 0; right: 0;
+  width: 400px;
   z-index: 100;
   padding: 8px 16px;
   overflow: hidden;
-  background: linear-gradient(0deg, var(--log-bg-start) 0%, transparent 100%);
+  background: var(--panel-bg);
+  border-left: 1px solid rgba(98,114,164,0.15);
   font-size: 11px;
   line-height: 1.6;
 }
@@ -147,22 +147,6 @@ body {
   display: flex;
   flex-direction: column;
   gap: 8px;
-}
-#legend {
-  font-size: 11px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  background: var(--panel-bg);
-  padding: 8px 12px;
-  border-radius: 4px;
-  color: var(--text-muted);
-}
-.legend-item { display: flex; align-items: center; gap: 8px; }
-.legend-dot {
-  width: 8px; height: 8px;
-  border-radius: 50%;
-  display: inline-block;
 }
 #top-attackers {
   font-size: 11px;
@@ -263,7 +247,7 @@ body {
 @keyframes spin { to { transform: rotate(360deg); } }
 
 @media (max-width: 768px) {
-  #map-wrapper { top: 36px; left: 0; right: 0; bottom: 0; }
+  #map-wrapper { top: 36px; left: 0; right: 0; bottom: 20vh; }
   #header {
     padding: 6px 10px;
     flex-wrap: wrap;
@@ -274,13 +258,15 @@ body {
   #stats { gap: 8px; font-size: 9px; flex-wrap: wrap; }
   .stat-val { font-size: 10px; }
   #attack-log {
+    top: auto;
     width: 100%;
     left: 0; right: 0;
+    max-height: 20vh;
     font-size: 8px;
     padding: 4px 8px;
-    max-height: 15vh;
     line-height: 1.4;
-    overflow: hidden;
+    border-left: none;
+    border-top: 1px solid rgba(98,114,164,0.15);
   }
   #bottom-left { display: none !important; }
   .range-opt { font-size: 9px; padding: 2px 5px; }
@@ -318,15 +304,6 @@ body {
 <div id="attack-log"></div>
 
 <div id="bottom-left">
-  <div id="legend">
-    <div class="legend-item"><span class="legend-dot" style="background:var(--ban)"></span> Ban</div>
-    <div class="legend-item"><span class="legend-dot" style="background:var(--sshd)"></span> Found</div>
-    <div class="legend-item"><span class="legend-dot" style="background:var(--aggressive)"></span> Aggressive</div>
-    <div class="legend-item"><span class="legend-dot" style="background:var(--portscan)"></span> Portscan</div>
-    <div class="legend-item"><span class="legend-dot" style="background:var(--ids-high)"></span> IDS High</div>
-    <div class="legend-item"><span class="legend-dot" style="background:var(--ids-alert)"></span> IDS Alert</div>
-    <div class="legend-item"><span class="legend-dot" style="background:var(--cf-block)"></span> CF WAF</div>
-  </div>
   <div id="top-attackers">
     <div class="panel-title">Top Countries</div>
     <div id="top-list"></div>
