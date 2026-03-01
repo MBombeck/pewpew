@@ -33,6 +33,9 @@ CF_API_KEY = os.environ.get("CF_API_KEY", "")
 CF_ZONE_ID = os.environ.get("CF_ZONE_ID", "")
 # Own IPs to filter from CF events (monitoring, VPN exits, servers)
 CF_OWN_IPS = set(os.environ.get("CF_OWN_IPS", "46.225.76.2,78.47.241.164,159.69.23.98").split(","))
+# Uberspace real-IP attack log API
+UBERSPACE_API_URL = os.environ.get("UBERSPACE_API_URL", "")
+UBERSPACE_API_KEY = os.environ.get("UBERSPACE_API_KEY", "")
 # Bochum coordinates (target for all arcs)
 TARGET_LAT = float(os.environ.get("TARGET_LAT", "51.4818"))
 TARGET_LON = float(os.environ.get("TARGET_LON", "7.2162"))
@@ -420,12 +423,90 @@ def query_cloudflare(since=None):
     return attacks
 
 
+def query_uberspace(since=None):
+    """Fetch recent web scan/attack events from Uberspace real-IP log API."""
+    if not UBERSPACE_API_URL or not UBERSPACE_API_KEY:
+        return []
+
+    use_range = since if since in VALID_RANGES else QUERY_RANGE
+    range_minutes = {"1h": 60, "6h": 360, "24h": 1440}
+    minutes = range_minutes.get(use_range, 60)
+
+    try:
+        resp = requests.get(
+            UBERSPACE_API_URL,
+            params={"since": minutes, "key": UBERSPACE_API_KEY},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        app.logger.error(f"Uberspace API query failed: {e}")
+        return []
+
+    events = data.get("attacks", [])
+    if not events:
+        return []
+
+    # Collect IPs for batch GeoIP
+    ips_to_lookup = {ev["ip"] for ev in events if ev.get("ip") and is_public_ip(ev["ip"])}
+    if not ips_to_lookup:
+        return []
+
+    geo_results = geoip_batch(list(ips_to_lookup))
+
+    attacks = []
+    for ev in events:
+        ip = ev.get("ip", "")
+        if not ip or not is_public_ip(ip):
+            continue
+        geo = geo_results.get(ip, {})
+        lat = geo.get("lat", 0)
+        lon = geo.get("lon", 0)
+        if lat == 0 and lon == 0:
+            continue
+
+        # Parse timestamp to epoch ms
+        ts_str = ev.get("ts", "")
+        try:
+            dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+            ts_ms = int(dt.timestamp() * 1000)
+        except (ValueError, AttributeError):
+            ts_ms = 0
+
+        action = ev.get("action", "Web Scan")
+        host = ev.get("host", "")
+        path = ev.get("path", "")
+
+        attacks.append({
+            "ts": ts_str.replace("T", " ").replace("Z", "") if ts_str else "",
+            "ts_epoch": ts_ms,
+            "ip": ip,
+            "jail": host.split(".")[0] if host else "uberspace",
+            "action": action,
+            "country": geo.get("country", "Unknown"),
+            "cc": geo.get("cc", "??"),
+            "city": geo.get("city", ""),
+            "isp": geo.get("isp", ""),
+            "host": host,
+            "src_lat": lat,
+            "src_lon": lon,
+            "dst_lat": TARGET_LAT,
+            "dst_lon": TARGET_LON,
+            "source": "uberspace",
+            "path": path,
+        })
+
+    return attacks
+
+
 def query_all(since=None):
-    """Fetch fail2ban, IDS, and Cloudflare events, merge and sort."""
+    """Fetch fail2ban, IDS, Cloudflare, and Uberspace events, merge and sort."""
     f2b = query_loki_f2b(since)
     ids = query_loki_ids(since)
     cf = query_cloudflare(since)
-    combined = f2b + ids + cf
+    ub = query_uberspace(since)
+    combined = f2b + ids + cf + ub
     combined.sort(key=lambda a: a.get("ts_epoch", 0))
     return combined
 

@@ -37,6 +37,7 @@
   --ids-high: #ff5555;
   --ids-alert: #f1fa8c;
   --cf-block: #e0976e;
+  --uberspace: #bd93f9;
   --target-stroke: rgba(189,147,249,0.4);
   --target-pulse: rgba(189,147,249,0.5);
   --target-fill: rgba(189,147,249,0.6);
@@ -128,6 +129,7 @@ body {
 .log-entry .color-ids-high { color: var(--ids-high); }
 .log-entry .color-ids-alert { color: var(--ids-alert); }
 .log-entry .color-cf-block { color: var(--cf-block); }
+.log-entry .color-uberspace { color: var(--uberspace); }
 .log-entry .host { color: var(--text-dim); }
 .log-entry .ip { color: var(--ip-color); }
 .log-entry .country { color: var(--text-muted); }
@@ -225,6 +227,7 @@ body {
 #tooltip .tt-ids-high { color: var(--ids-high); }
 #tooltip .tt-ids-alert { color: var(--ids-alert); }
 #tooltip .tt-cf-block { color: var(--cf-block); }
+#tooltip .tt-uberspace { color: var(--uberspace); }
 
 #no-data {
   position: fixed;
@@ -281,6 +284,7 @@ body {
     <div>Bans: <span class="stat-val" id="stat-bans" style="color:var(--ban)">—</span></div>
     <div>IDS: <span class="stat-val" id="stat-ids" style="color:var(--ids-high)">—</span></div>
     <div>WAF: <span class="stat-val" id="stat-cf" style="color:var(--cf-block)">—</span></div>
+    <div>Web: <span class="stat-val" id="stat-ub" style="color:var(--uberspace)">—</span></div>
     <div>Found: <span class="stat-val" id="stat-found">—</span></div>
     <div>IPs: <span class="stat-val" id="stat-ips">—</span></div>
     <div>Countries: <span class="stat-val" id="stat-countries">—</span></div>
@@ -334,6 +338,7 @@ body {
       idsHigh: css("--ids-high"),
       idsAlert: css("--ids-alert"),
       cfBlock: css("--cf-block"),
+      uberspace: css("--uberspace"),
       border: css("--border"),
       land: css("--land"),
       mapBorder: css("--map-border"),
@@ -466,11 +471,16 @@ body {
     return attack.source === "cloudflare";
   }
 
+  function isUB(attack) {
+    return attack.source === "uberspace";
+  }
+
   function isBan(action) {
     return action === "Ban" || action === "Restore Ban";
   }
 
   function attackColor(attack) {
+    if (isUB(attack)) return colors.uberspace;
     if (isCF(attack)) return colors.cfBlock;
     if (isIDS(attack)) {
       return attack.action === "IDS High" ? colors.idsHigh : colors.idsAlert;
@@ -483,8 +493,10 @@ body {
   }
 
   var CF_LIFETIME = 8000;
+  var UB_LIFETIME = 6000;
 
   function attackLifetime(attack) {
+    if (isUB(attack)) return UB_LIFETIME;
     if (isCF(attack)) return CF_LIFETIME;
     if (isIDS(attack)) return IDS_LIFETIME;
     if (isBan(attack.action)) return BAN_LIFETIME;
@@ -500,6 +512,7 @@ body {
     var ban = isBan(attack.action);
     var ids = isIDS(attack);
     var cf = isCF(attack);
+    var ub = isUB(attack);
     var lifetime = attackLifetime(attack);
 
     var src = proj([attack.src_lon, attack.src_lat]);
@@ -556,7 +569,7 @@ body {
       })
       .each("end", function() {
         d3.select(this).remove();
-        spawnImpact(svg, dst, color, ban || ids || cf);
+        spawnImpact(svg, dst, color, ban || ids || cf || ub);
       });
 
     // --- Source pulse ---
@@ -747,7 +760,7 @@ body {
   function showTooltip(a, svgX, svgY) {
     var tt = document.getElementById("tooltip");
     var container = document.getElementById("map-container");
-    var actionClass = isCF(a) ? "tt-cf-block" : isIDS(a) ? (a.action === "IDS High" ? "tt-ids-high" : "tt-ids-alert") : (isBan(a.action) ? "tt-ban" : "tt-found");
+    var actionClass = isUB(a) ? "tt-uberspace" : isCF(a) ? "tt-cf-block" : isIDS(a) ? (a.action === "IDS High" ? "tt-ids-high" : "tt-ids-alert") : (isBan(a.action) ? "tt-ban" : "tt-found");
     var time = formatTime(a);
     tt.innerHTML =
       '<div><span class="tt-ip">' + a.ip + '</span></div>' +
@@ -792,6 +805,7 @@ body {
   }
 
   function logColorClass(a) {
+    if (isUB(a)) return "color-uberspace";
     if (isCF(a)) return "color-cf-block";
     if (isIDS(a)) return a.action === "IDS High" ? "color-ids-high" : "color-ids-alert";
     if (isBan(a.action)) return "color-ban";
@@ -910,10 +924,12 @@ body {
     var found = 0;
     var ids = 0;
     var cf = 0;
+    var ub = 0;
     for (var i = 0; i < attacks.length; i++) {
       ips[attacks[i].ip] = true;
       countries[attacks[i].cc] = true;
-      if (isCF(attacks[i])) cf++;
+      if (isUB(attacks[i])) ub++;
+      else if (isCF(attacks[i])) cf++;
       else if (isIDS(attacks[i])) ids++;
       else if (isBan(attacks[i].action)) bans++;
       else found++;
@@ -922,6 +938,7 @@ body {
     document.getElementById("stat-bans").textContent = bans;
     document.getElementById("stat-ids").textContent = ids;
     document.getElementById("stat-cf").textContent = cf;
+    document.getElementById("stat-ub").textContent = ub;
     document.getElementById("stat-found").textContent = found;
     document.getElementById("stat-ips").textContent = Object.keys(ips).length;
     document.getElementById("stat-countries").textContent = Object.keys(countries).length;
