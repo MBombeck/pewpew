@@ -54,7 +54,7 @@ body {
 
 #map-wrapper {
   position: absolute;
-  top: 60px; left: 16px; right: 400px; bottom: 16px;
+  top: 60px; left: 16px; right: 16px; bottom: 16px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -101,13 +101,13 @@ body {
 
 #attack-log {
   position: fixed;
-  top: 60px; bottom: 0; right: 0;
-  width: 400px;
+  bottom: 0; right: 0;
+  width: 480px;
+  max-height: 40vh;
   z-index: 100;
   padding: 8px 16px;
   overflow: hidden;
-  background: var(--panel-bg);
-  border-left: 1px solid rgba(98,114,164,0.15);
+  background: linear-gradient(0deg, var(--log-bg-start) 0%, transparent 100%);
   font-size: 11px;
   line-height: 1.6;
 }
@@ -258,15 +258,13 @@ body {
   #stats { gap: 8px; font-size: 9px; flex-wrap: wrap; }
   .stat-val { font-size: 10px; }
   #attack-log {
-    top: auto;
     width: 100%;
     left: 0; right: 0;
-    max-height: 20vh;
+    max-height: 15vh;
     font-size: 8px;
     padding: 4px 8px;
     line-height: 1.4;
-    border-left: none;
-    border-top: 1px solid rgba(98,114,164,0.15);
+    overflow: hidden;
   }
   #bottom-left { display: none !important; }
   .range-opt { font-size: 9px; padding: 2px 5px; }
