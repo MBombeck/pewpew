@@ -500,7 +500,8 @@ def query_uberspace(since=None):
     try:
         resp = requests.get(
             UBERSPACE_API_URL,
-            params={"since": minutes, "key": UBERSPACE_API_KEY},
+            params={"since": minutes},
+            headers={"X-API-Key": UBERSPACE_API_KEY},
             timeout=15,
         )
         resp.raise_for_status()
